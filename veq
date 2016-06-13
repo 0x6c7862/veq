@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+declare -r version='1.0.0'
+
+bail () {
+	declare -r message="${@}"
+
+	# Print message to stderr and die with error
+	printf 'veq: %s\n' "${message[@]}" 1>&2
+	exit 1
+}
+
+halp () {
+	declare ret="${1}"
+	shift 1
+	declare message="${@}"
+
+	cat 1>&2 <<EOF
+${message[@]}
+Usage: veq [options] [target]
+	-c	Path to an alternative client.
+	-f	Path to a request template file.
+	-h	Display this help message.
+	-v	Display version information and exit.
+EOF
+	exit "${ret}"
+}
+
+version () {
+	printf 'veq %s (https://github.com/0x6c7862/veq)\n' "${version}"
+}
+
+client_exists () {
+	declare -r default='veq-client'
+	declare -r client_opt="${1}"
+
+	# Check argument first
+	if [[ -x "${client_opt}" ]]; then
+		export CLIENT_BIN="${client_opt}"
+		return
+	fi
+	if [[ -n "${client_opt}" ]]; then
+		printf 'veq: %s not found. Falling back to %s\n' \
+			"${client_opt}" "${default}" 1>&2
+	fi
+
+	# Fallback to default
+	for client_prog in "$(which "${default}" 2>/dev/null)" "$(dirname "${0}")/${default}"; do
+		if [[ -x "${client_prog}" ]]; then
+			export CLIENT_BIN="${client_prog}"
+			return
+		fi
+	done
+	bail 'no client binary found. See https://github.com/0x6c7862/veq for installation instructions.'
+}
+
+entr_exists () {
+	for entr_prog in "$(which entr 2>/dev/null)"; do
+		if [[ -x "${entr_prog}" ]]; then
+			export ENTR_BIN="${entr_prog}"
+			return
+		fi
+	done
+	bail 'no entr binary found. See http://entrproject.org/ for installation instructions.'
+}
+
+vim_exists () {
+	for vim_prog in "$(which vim 2>/dev/null)" \
+		"$(which vim-gnome 2>/dev/null)" \
+		"$(which vimx 2>/dev/null)"; do
+		if [[ -x "${vim_prog}" ]] && \
+			[[ -n "$("${vim_prog}" --version 2>/dev/null | grep '+clientserver')" ]]; then
+			export VIM_BIN="${vim_prog}"
+			return
+		fi
+	done
+	bail 'no vim binary with clientserver support found. Install vim-gnome '`
+		`'on Debian based distributions or vim-X11 on Fedora based distributions.'
+}
+
+req_file () {
+	declare -r template="${1}"
+	declare -r target_host="${2}"
+	declare -r req_file="$(mktemp /tmp/request.XXXXXXXX)"
+
+	# Use given template file or fallback to a simple GET and return the filename
+	if [[ -n "${template}" ]]; then
+		# Check if template looks like an HTTP request or send the file as a POST
+		if [[ -n "$(sed -nre '1!d' -e '/^[A-Z]+ .+ HTTP\/[0-9.]+$/p' "${template}")" ]]; then
+			sed "s/{{ host }}/${target_host}/" "${template}" >"${req_file}"
+		else
+			cat >"${req_file}" <<EOF
+POST / HTTP/1.1
+Host: ${target_host}
+Content-Type: $(file -i "${template}" | sed 's/^[^:]*: //')
+Content-Length: $(du -b "${template}" | sed 's/[	 ].*$//')
+
+EOF
+			cat "${template}" >>"${req_file}"
+			printf "\n\n" >>"${req_file}"
+		fi
+	else
+		printf "GET / HTTP/1.1\nHost: ${target_host}\n\n" >"${req_file}"
+	fi
+	echo "${req_file}"
+}
+
+res_file () {
+	declare -r res_file="$(mktemp /tmp/response.XXXXXXXX)"
+
+	# Create the response and return the filename
+	>"${res_file}"
+	echo "${res_file}"
+}
+
+new_session () {
+	declare -r prefix="request-"
+
+	# Bogosort-inspired session generator. Can't fail, but may block forever
+	# and peg CPU.
+	while :; do
+		declare temp="${RANDOM}"
+		if [[ -z "$(vim --servername "${prefix}${temp}" --remote-send '' 2>&1 | grep 'E247')" ]]; then
+			echo "${prefix}${temp}"
+			return
+		fi
+	done
+}
+
+vim_session () {
+	declare -r session="${1}"
+	declare -r target="${2}"
+	declare -r req_file="${3}"
+	declare -r res_file="${4}"
+
+	# Create a task runner to watch the request file and launch vim
+	PAGER=/bin/cat "${ENTR_BIN}" -p \
+		"${CLIENT_BIN}" "${target}" "${req_file}" "${res_file}" <<<"${req_file}" &
+	"${VIM_BIN}" --servername "${session}" \
+		-b -c 'set ff=unix' -c 'set ft=html' \
+		-O "${req_file}" "${res_file}" </dev/tty
+
+	# Cleanup
+	kill $(jobs -rp)
+	wait $(jobs -rp) 2>/dev/null
+}
+
+main () {
+	# Check options
+	while getopts "c:f:hv" opt; do
+		case "${opt}" in
+		c)
+			client_opt="${OPTARG}"
+			;;
+		f)
+			if [[ "${OPTARG}" == '-' ]]; then
+				template_opt="/dev/stdin"
+			else
+				template_opt="${OPTARG}"
+			fi
+			;;
+		h)
+			halp 0 "$(version)"
+			;;
+		v)
+			version
+			exit 0
+			;;
+		\?)
+			halp 1 "$(version)"
+		esac
+	done
+	shift $(( OPTIND-1 ))
+
+	# Check target
+	declare -r target="${1}"
+	declare -r target_host="$(sed -e 's/^.*:\/\///' -e 's/:.*$//' <<<"${target}")"
+	[[ -z "${target}" ]] && halp 1 'veq: missing target'
+
+	# Check external binaries
+	client_exists "${client_opt}"
+	entr_exists
+	vim_exists
+
+	# Create session
+	declare -r req_file="$(req_file "${template_opt}" "${target_host}")"
+	declare -r res_file="$(res_file)"
+	vim_session "$(new_session)" "${target}" "${req_file}" "${res_file}"
+
+	# Cleanup
+	rm "${req_file}"
+	rm "${res_file}"
+}
+
+main "${@}"

@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+TIMEOUT=${TIMEOUT:-1}
+
+refresh_res () {
+	declare -r res_file="${1}"
+
+	"${VIM_BIN}" --servername request \
+		--remote-send '<C-w>l:bd!<CR>:vs '"${res_file}"'<CR><C-w>L<C-w>h'
+}
+
+bail () {
+	declare -r res_file="${1}"
+	shift 1
+	declare -r message="${@}"
+
+	# Print message to stderr and die with error
+	printf "#\n# ERROR\n#\n\n%s\n" "${message[@]}" >"${res_file}"
+	refresh_res "${res_file}"
+	exit 1
+}
+
+ssl_req () {
+	declare -r target_host="${1}"
+	declare -r target_post="${2}"
+	declare -r req_file="${3}"
+	declare -r res_file="${4}"
+
+	(cat "${req_file}"; sleep "${TIMEOUT}") | \
+		ncat --ssl "${target_host}" "${target_port}" | sed -e '{s/\x01.*//;T skip;q;:skip}' &>"${res_file}"
+	[[ "${?}" != 0 ]] && bail "${res_file}" "$(cat "${res_file}")"
+}
+
+req () {
+	declare -r target_host="${1}"
+	declare -r target_post="${2}"
+	declare -r req_file="${3}"
+	declare -r res_file="${4}"
+
+	(cat "${req_file}"; sleep "${TIMEOUT}") | \
+		ncat "${target_host}" "${target_port}" &>"${res_file}"
+	[[ "${?}" != 0 ]] && bail "${res_file}" "$(cat "${res_file}")"
+}
+
+main () {
+	declare target="${1}"
+	declare -r req_file="${2}"
+	declare -r res_file="${3}"
+
+	# Prefix target with http:// by default if missing
+	if [[ -z "$(sed -nre "/^http[s]{0,1}:\/\//p" <<<"${target}")" ]]; then
+		declare target="http://${target}"
+	fi
+
+	# Get protocol
+	declare -r target_protocol="$(sed -e 's/^\(.*\):\/\/.*/\1/' <<<"${target}")"
+
+	# Get hostname
+	declare -r target_host="$(sed -e 's/^\(.*\):.*/\1/' <<<"${target##${target_protocol}://}")"
+
+	# Get port
+	declare target_port="${target##${target_protocol}://${target_host}}"
+	declare target_port="${target_port##:}"
+	if [[ "${target_port}" == "" ]]; then
+		if [[ "${target_protocol}" == "https" ]]; then
+			declare target_port="443"
+		else
+			declare target_port="80"
+		fi
+	fi
+
+	# Ensure request and response files exist
+	! [[ -f ${req_file} ]] && bail "${res_file}" "missing request file"
+	! [[ -f ${res_file} ]] && bail "${res_file}" "missing response file"
+
+	# Make request
+	if [[ "${target_protocol}" == "https" ]]; then
+		ssl_req "${target_host}" "${target_post}" "${req_file}" "${res_file}"
+	else
+		req "${target_host}" "${target_post}" "${req_file}" "${res_file}"
+	fi
+	refresh_res "${res_file}"
+}
+
+main "${@}"
