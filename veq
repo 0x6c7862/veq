@@ -134,7 +134,7 @@ vim_session () {
 
 	# Create a task runner to watch the request file and launch vim
 	PAGER=/bin/cat "${ENTR_BIN}" -p \
-		"${CLIENT_BIN}" "${target}" "${req_file}" "${res_file}" <<<"${req_file}" &
+		"${CLIENT_BIN}" "${session}" "${target}" "${req_file}" "${res_file}" <<<"${req_file}" &
 	"${VIM_BIN}" --servername "${session}" \
 		-b -c 'set ff=unix' -c 'set ft=html' \
 		-O "${req_file}" "${res_file}" </dev/tty

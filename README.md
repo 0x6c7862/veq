@@ -34,7 +34,7 @@ client can be used via the `-c` flag. To write an alternative client, create a
 binary that can be called in the following manner:
 
 ```bash
-$CLIENT $TARGET $REQUEST_FILENAME $RESPONSE_FILENAME
+$CLIENT $VIM_SESSION $TARGET $REQUEST_FILENAME $RESPONSE_FILENAME
 ```
 
 The client is responsible for making the request and updating the `vim` server

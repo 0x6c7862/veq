@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 TIMEOUT=${TIMEOUT:-1}
+declare -r session="${1}"
 
 refresh_res () {
 	declare -r res_file="${1}"
 
-	"${VIM_BIN}" --servername request \
+	"${VIM_BIN}" --servername "${session}" \
 		--remote-send '<C-w>l:bd!<CR>:vs '"${res_file}"'<CR><C-w>L<C-w>h'
 }
 
@@ -42,9 +43,9 @@ req () {
 }
 
 main () {
-	declare target="${1}"
-	declare -r req_file="${2}"
-	declare -r res_file="${3}"
+	declare target="${2}"
+	declare -r req_file="${3}"
+	declare -r res_file="${4}"
 
 	# Prefix target with http:// by default if missing
 	if [[ -z "$(sed -nre "/^http[s]{0,1}:\/\//p" <<<"${target}")" ]]; then
